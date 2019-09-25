@@ -1,7 +1,14 @@
-Module Lib (playMultiPong) where
+{-# LANGUAGE RecordWildCards #-}
 
+module Lib 
+( playMultiPong
+, GameState(..)
+) 
+where
+
+import Control.Monad
 import Graphics.Gloss
-import Graphics.Gloss.Pure.Game
+import Graphics.Gloss.Interface.Pure.Game
 
 ---------------------------------
 data PongState = PongState 
@@ -14,7 +21,7 @@ type Radius = Float
 data GameWindow = GameWindow
   { area          :: Point 
   , paddle        :: Point 
-  , ballRadius    :: Radius
+  , radius    :: Radius
   , ballColor     :: Color
   , paddleColors  :: (Color, Color) }
 
@@ -23,16 +30,18 @@ data GameState = GameState
   , window  :: GameWindow 
   , paused  :: Bool }
 
+data GameMode = SinglePlayer | Multiplayer
 -----------------------------------------
 
 mkWall :: Point -> Picture
-mkWalls (w, h) = let wall = color grey $ rectangleSolid w 5
+mkWall (w, h) = let wall = color (light black) $ rectangleSolid w 5
                 in pictures [ translate 0 (-h/2) wall, translate 0 (h/2) wall ]
 
 mkDivider :: Float -> Float -> Picture
-mkDivider (h, n) = let circles = repeat (circleSolid n)
-                    zipped  = zip circles [(height/2), (height/2 - 10)..(-height/2)]
-                in pictures $ foldl (\(pic, pos) -> translate 0 pos pic)
+mkDivider h n = let 
+                    circles = repeat (color white (circleSolid n))
+                    zipped  = zip circles [(h/2), (h/2 - 10)..(-h/2)]
+                  in pictures $ foldl (\ acc (pic, pos) -> translate 0 (pos - 5) pic : acc) [] zipped 
 
 mkPaddle :: Point -> Color -> Float -> Picture
 mkPaddle (w,h) cl n = pictures [  color yellow $ rectangleSolid (w+n) (h+n)
@@ -42,156 +51,140 @@ mkBall :: Radius -> Color -> Picture
 mkBall r cl = pictures [color white $ circle (r+1), color cl $ circleSolid r]
 
 mkArena :: GameWindow -> Picture
-mkArena gwin = pictures [ mkWalls (w,h), mkDivider (h,r) ]
+mkArena GameWindow{..} = pictures [ mkWall (w,h), mkDivider h (r/10) ]
   where
-    (w,h) = area gwin
-    (pw,ph) = paddle gwin
-    r = ballRadius gwi
+    (w,h) = area 
+    (pw,ph) = paddle
+    r = radius 
   
 render :: GameState -> Picture
-render game = if (paused game)
+render GameState{..} = if paused
                  then pictures [ Blank, Text "Paused"]
-                 else pictures  [ mkArena gwin
-                                , mkBall (ballRadius gwin) (ballColor gwin)
-                                , playerOne
-                                , playerTwo ]
+                 else pictures  $ mkArena window : gamePics
   where
-    gwin      = window game 
-    (w,h)     = area gwin
-    (pw,ph)   = paddle gwin
-    pOneY     = playerOneY $ state game
-    pTwoY     = playerTwoY $ state game
-    playerOne = translate (-w/2) pOneY $ mkPaddle (pw,ph) cl  (pw/3)
-    playerTwo = translate (w/2)  pTwoY $ mkPaddle (pw,ph) cl' (pw/3)
+    gamePics = let f PongState{..} = [uncurry translate ballLoc ball, players state] in f state
+    (w,h)                 = area window
+    (pw,ph)               = paddle window
+    ball                  = mkBall (radius window) (ballColor window)
+    players PongState{..} = pictures  [ translate (-w/2) playerOneY $ mkPaddle (pw,ph) red  (pw/3)
+                                      , translate (w/2)  playerTwoY $ mkPaddle (pw,ph) blue (pw/3) ]
 
 -------------------------------------------------------------------------------
+
 moveBall :: Float -> GameState -> GameState
 moveBall time game = game { state = pstate { ballLoc = (x', y') } }
   where
     pstate    = state game
-    (x,y)     = ballLoc state
-    (vx, vy)  = ballVel state
-    [x', y']  = (*y) <$> (+x) <$> [vx*time, vy*time]
+    (x,y)     = ballLoc pstate
+    (vx, vy)  = ballVel pstate
+    [x', y']  =  (\[a,b] -> [a + vx / 20, b + vy / 20]) $ (+ time) <$> [x,  y]
 
-wallCollision :: GameWindow -> Bool
-wallCollision gwin = bottomCollision || topCollision
+wallCollision :: GameState -> Bool
+wallCollision GameState{ window = GameWindow{..},state = PongState{..}, ..} 
+              = bottomCollision || topCollision
   where
-        (_,y)           = ballLoc gwin
-        (w,_)           = area gwin
-        radius          = ballRadius gwin
-        bottomCollision = y - radius <= -w  / 2
-        topCollision    = y + radius >=  w  / 2
+        (_,y)           = ballLoc
+        (_,h)           = area 
+        bottomCollision = y - radius <= -h  / 2
+        topCollision    = y + radius >=  h  / 2
 
 wallBounce :: GameState -> GameState
-wallBounce gstate = if wallCollision (x,y) (window state)
-                      then gstate { state = pstate { ballVel = (x, -y) } }
-                      else gstate
+wallBounce GameState{..}  = if wallCollision GameState{..}
+                            then let ballVel = (vx, -vy)  in GameState{..}
+                            else GameState{..}
   where
-    pstate  = state gstate
-    (x,y)   = ballLoc pstate
+    (vx,vy)   = ballVel state
 
-paddleBounce :: GameState -> GameState 
-paddleCollision game  
-  | leftCollision || rightCollision = game { state = pstate { ballVel = (-vx, vy) } }
-  | otherwise = game
+paddleCollision :: GameState -> Bool 
+paddleCollision GameState{ window = GameWindow{..}
+                        , state  = PongState{..} } = leftCollision || rightCollision
   where
-        gwin            = window game
-        pstate          = state game
+  (x,y)     = ballLoc
+  (width,_) = area
+  (pw,ph)   = paddle 
+  paddleX   = width + pw
+  leftCollision   =  x - radius <=  paddleX  / 2 && hasSameY playerOneY
+  rightCollision  =  x + radius >= -paddleX  / 2 && hasSameY playerTwoY
+  hasSameY mp     =  y + radius > mp - ph / 2 && y - radius <= ph 
 
-        (width,_)       = area gwin
-        (pw,ph)         = paddle gwin
-        mp1             = playerOneY game
-        mp2             = playerTwoY game
-        (x,y)           = ballLoc pstate
-        (vx, vy)        = ballVel pstate
-
-        leftCollision   = x - radius <=  (-width + pw) / 2 && hasSameY mp1
-        rightCollision  = x + radius >=  ( width - pw) / 2 && hasSameY mp2
-        hasSameY mp     = (y + radius > mp - ph / 2 && y - radius <= ph)
-
+paddleBounce :: GameState -> GameState
+paddleBounce GameState{..} = 
+  if paddleCollision GameState{..}
+  then  let (vx, vy) = ballVel state
+        in GameState{..}
+  else  GameState{..}
 -------------------------------------------------------------------------------
 
 mkInitialState :: Point -> GameState
-mkinitialState (w,h) = GameState { state :: pstate, window :: win, paused = False }
-  where
-    win = GameWindow  { area         = (w,h)
-                      , paddle       = (w/15, h/6)
-                      , ballRadius   = w/30
-                      , ballColor    = yellow
-                      , paddleColors = (blue, red)
-                      , ballColor    = yellow }
+mkInitialState (w,h) = let 
+                        window = GameWindow { 
+                          area         = (w,h)
+                        , paddle       = (w/15, h/6)
+                        , radius   = w/30
+                        , ballColor    = yellow
+                        , paddleColors = (blue, red) }
     
-    pstate = PongState {  ballVel     = (30,15)
-                       ,  ballLoc     = (0,0)
-                       ,  playerOneY  = 0
-                       ,  playerTwoY  = 0 }
+                        state = PongState {
+                           ballVel      = (30,15)
+                        ,  ballLoc     = (0,0)
+                        ,  playerOneY  = 0
+                        ,  playerTwoY  = 0 }
+
+                        paused = False
+                        
+                        in GameState{..}
 
 windowed :: Point -> Display
-windowed (w,h)  = InWindow "Pong" (w',h')
+windowed (w,h)  = InWindow "Pong" (w',h') (100,100)
   where (w',h') = (floor w, floor h)
 
-mkPongGame :: Point -> Color -> Int -> (Event -> a -> a) -> IO ()
+mkPongGame :: Point -> Color -> Int -> (Event -> GameState -> GameState) -> IO ()
 mkPongGame (w,h) cl fps eventHandler = play 
                                         (windowed (w,h))
                                         cl                -- background color
                                         fps                
-                                        mkInitialState (w,h)
+                                        (mkInitialState (w,h))
                                         render
                                         eventHandler
                                         update
   where
-    update = wallBounce . paddleBounce . moveBall time
+    update t = wallBounce . paddleBounce . moveBall t
 
-createHandler :: Event -> (Key -> GameState) -> GameState -> GameState
-createHandler (EventKey key Down _ _) playerTwoHandler game
-  | key == SpecialKey Up || key == SpecialKey Down  = playerOneHandler key
-  | key == Char 'w' || key == Char 's' = playerTwoHandler key
-  | otherwise = game
+createHandler :: Event -> (GameState -> Key -> PongState) -> (GameState -> Key -> PongState) -> GameState -> GameState
+createHandler (EventKey key Down _ _) pTwoHandler pOneHandler game
+  | key == SpecialKey KeyUp || key == SpecialKey KeyDown = game {state = playerOneHandler GameState{..} key}
+  | key == Char 'w' || key == Char 's'                   = game {state = playerTwoHandler GameState{..} key} 
+  | otherwise = game 
+createHandler _ _ game = game
+
+playerOneHandler :: GameState -> Key -> PongState
+playerOneHandler GameState{..} (SpecialKey sk)
+  | sk == KeyUp   &&  pOneY + (ph/2) + 15 <=  (h/2) = state { playerOneY = pOneY + 15 }
+  | sk == KeyDown &&  pOneY - (ph/2) - 15 >= -(h/2) = state { playerOneY = pOneY - 15 }
+  | otherwise = state
   where
-    pstate = state game
-    pOneY = playerOneY pstate
-    gwin = window game
-    (_,h) = area gwin
-    (_,ph) = paddle gwin
-    playerOneHandler :: Key -> GameState
-    playerOneHandler (SpecialKey sk) 
-      | sk == Up && pOneY + (ph/2) + 10 <= (h/2) =  game 
-                                                      { state = 
-                                                        pstate  
-                                                          { playerOneY = pOneY + 10 } }
-      | sk == Down && pOneY - (ph/2) - 10 <= -(h/2) = game 
-                                                        { state =
-                                                          pstate
-                                                            { playerOneY = pOneY - 10 } }
-      | otherwise = game
+    pOneY   = playerOneY state
+    (_,h)   = area window
+    (_,ph)  = paddle window
 
-singlePlayerHandler :: Event -> GameState -> GameState
-singlePlayerHandler e game =  let pTwoHandler _ = game
-                              in createHandler e pTwoHandler game
+playerOneHandler game _ = state game
+
+playerTwoHandler :: GameState -> Key -> PongState
+playerTwoHandler GameState{..} (Char c) 
+  | c == 'w' && pTwoY + (ph/2) + 10 <= (h/2)  = let playerTwoY = pTwoY + 10 in PongState{..}
+  | c == 's' && pTwoY - (ph/2) - 10 >= -(h/2) = let playerTwoY = pTwoY - 10 in PongState{..}
+  | otherwise = PongState{..}
+  where
+    pTwoY   = playerTwoY state
+    (_,h)   = area window
+    (_,ph)  = paddle window
 
 multiPlayerHandler :: Event -> GameState -> GameState
-multiPlayerHandler e game = createHandler e pTwoHandler game
-  where
-    pstate  = state game
-    gwin    = window game
-    (_,h)   = area gwin
-    (_,ph)  = paddle gwin
-    pTwoY   = playerTwoY pstate    
+multiPlayerHandler e = createHandler e playerOneHandler playerTwoHandler                                    
 
-    pTwoHandler :: Key -> GameState
-    pTwoHandler (Char c)
-      | c == 'w' && pTwoY + (ph/2) + 10 <= (h/2) = game 
-                                                    { state = 
-                                                      pstate 
-                                                        { playerTwoY = pTwoY + 10 } }
-      | c == 's' && pTwoY - (ph/2) - 10 >= -(h/2) = game 
-                                                      { state = 
-                                                        pstate 
-                                                          { playerTwoY = pTwoY - 10 } }
-      | otherwise = game
 -----------------------------------------------------------------------------------
 playMultiPong :: Point -> Color -> Int -> IO ()
 playMultiPong (w,h) cl fps = mkPongGame (w,h) cl fps multiPlayerHandler
 
-playSoloPong :: Point -> Color -> Int -> IO ()
-playSoloPong (w,h) cl fps = mkPongGame (w,h) cl (fps) singlePlayerHandler
+--playSoloPong :: Point -> Color -> Int -> IO ()
+--playSoloPong (w,h) cl fps = mkPongGame (w,h) cl fps singlePlayerHandler
