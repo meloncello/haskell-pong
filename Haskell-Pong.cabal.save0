@@ -16,13 +16,10 @@ name:                Haskell-Pong
 version:             1.0.0.0
 
 -- A short (one-line) description of the package.
-synopsis:            this is a pong reimplementation written in haskell using gloss
+synopsis:            this game is an implementation of Pong wrotten in Haskell + Gloss
 
 -- A longer description of the package.
 -- description:
-
--- URL for the project homepage or repository.
-homepage:            https://github.com/meloncello/haskell-pong
 
 -- A URL where users can report bugs.
 -- bug-reports:
@@ -47,7 +44,7 @@ category:            Game
 
 -- Extra files to be distributed with the package, such as examples or a
 -- README.
-extra-source-files:  Readme.md
+extra-source-files:  README.md
 
 
 executable Haskell-Pong
@@ -55,14 +52,13 @@ executable Haskell-Pong
   main-is:             Main.hs
 
   -- Modules included in this executable, other than Main.
-  other-modules:       Lib
+  other-modules:       Lib.hs
 
   -- LANGUAGE extensions used by modules in this package.
   -- other-extensions:
 
   -- Other library packages from which modules are imported.
   build-depends:       base ^>=4.12.0.0, gloss ^>=1.13.0.1
-
 
   -- Directories containing source files.
   hs-source-dirs:      src
